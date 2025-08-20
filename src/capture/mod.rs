@@ -284,4 +284,26 @@ impl PacketCapture {
         let packets_guard = self.packets.lock().unwrap();
         packets_guard.len()
     }
+
+    pub fn get_packets_for_client(&self, client_ip: &str, client_port: u16) -> Vec<CapturedPacket> {
+        let packets_guard = self.packets.lock().unwrap();
+        packets_guard
+            .iter()
+            .filter(|packet| packet.src_ip == client_ip && packet.src_port == client_port)
+            .cloned()
+            .collect()
+    }
+
+    pub fn clear_packets_for_client(&self, client_ip: &str, client_port: u16) {
+        let mut packets_guard = self.packets.lock().unwrap();
+        packets_guard.retain(|packet| !(packet.src_ip == client_ip && packet.src_port == client_port));
+    }
+
+    pub fn get_packet_count_for_client(&self, client_ip: &str, client_port: u16) -> usize {
+        let packets_guard = self.packets.lock().unwrap();
+        packets_guard
+            .iter()
+            .filter(|packet| packet.src_ip == client_ip && packet.src_port == client_port)
+            .count()
+    }
 }

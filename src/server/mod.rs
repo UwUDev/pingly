@@ -184,36 +184,34 @@ pub async fn http2_track(
 
 #[inline]
 pub async fn get_packets(
+    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
     Extension(capture): Extension<PacketCapture>,
 ) -> Result<ErasedJson> {
-    // Small delay to ensure any packets from this request are captured
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let packets = capture.get_packets();
+    let client_ip = addr.ip().to_string();
+    let client_port = addr.port();
 
-    // Clear packets after retrieving them so each request shows fresh data
-    capture.clear_packets();
+    let packets = capture.get_packets_for_client(&client_ip, client_port);
 
-    // TODO: only clear packet matching the current request (ip port) to avoid losing packets
-    // So if there are multiple requests, we can still see packets for each one
+    capture.clear_packets_for_client(&client_ip, client_port);
 
     Ok(ErasedJson::pretty(&packets))
 }
 
 #[inline]
 pub async fn get_packet_count(
+    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
     Extension(capture): Extension<PacketCapture>,
 ) -> Result<ErasedJson> {
-    // Small delay to ensure any packets from this request are captured
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let count = capture.get_packet_count();
+    let client_ip = addr.ip().to_string();
+    let client_port = addr.port();
 
-    // Clear packets after getting count so each request shows fresh data
-    capture.clear_packets();
+    let count = capture.get_packet_count_for_client(&client_ip, client_port);
 
-    // TODO: only clear packet matching the current request (ip port) to avoid losing packets
-    // So if there are multiple requests, we can still see packets for each one
+    capture.clear_packets_for_client(&client_ip, client_port);
 
     Ok(ErasedJson::pretty(count))
 }
