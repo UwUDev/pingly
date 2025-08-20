@@ -1,6 +1,7 @@
 #![cfg_attr(not(test), warn(unused_crate_dependencies))]
 
 pub mod alloc;
+mod capture;
 #[cfg(target_family = "unix")]
 mod daemon;
 mod error;
@@ -44,6 +45,14 @@ pub struct Args {
     /// TLS private key file path (EC/PKCS8/RSA)
     #[clap(short = 'K', long)]
     pub tls_key: Option<PathBuf>,
+
+    /// Enable packet capture for TCP/IP analysis (requires root privileges)
+    #[clap(long)]
+    pub capture_packets: bool,
+
+    /// Network interface to capture packets from (default: auto-detect)
+    #[clap(long)]
+    pub capture_interface: Option<String>,
 }
 
 #[derive(Subcommand)]

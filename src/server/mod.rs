@@ -27,6 +27,7 @@ use tracker::{
 };
 
 use crate::{error::Error, Args, Result};
+use crate::capture::PacketCapture;
 
 #[tokio::main]
 pub async fn run(args: Args) -> Result<()> {
@@ -43,6 +44,22 @@ pub async fn run(args: Args) -> Result<()> {
     tracing::info!("Keep alive: {}s", args.keep_alive_timeout);
     tracing::info!("Concurrent limit: {}", args.concurrent);
     tracing::info!("Bind address: {}", args.bind);
+
+    // Initialize packet capture if enabled
+    let packet_capture = if args.capture_packets {
+        tracing::info!("Packet capture enabled - requires root privileges");
+        let capture = PacketCapture::new(128, args.bind.port()); // Keep last 1000 packets
+        if let Err(e) = capture.start_capture(args.capture_interface.clone()) {
+            tracing::error!("Failed to start packet capture: {}", e);
+            tracing::warn!("Continuing without packet capture...");
+            None
+        } else {
+            tracing::info!("Packet capture started successfully");
+            Some(capture)
+        }
+    } else {
+        None
+    };
 
     // init global layer provider
     let global_layer = tower::ServiceBuilder::new()
@@ -61,12 +78,21 @@ pub async fn run(args: Args) -> Result<()> {
         )
         .layer(ConcurrencyLimitLayer::new(args.concurrent));
 
-    let router = Router::new()
+    let mut router = Router::new()
         .route("/api/all", any(track))
         .route("/api/tls", any(tls_track))
         .route("/api/http1", any(http1_track))
-        .route("/api/http2", any(http2_track))
-        .layer(global_layer);
+        .route("/api/http2", any(http2_track));
+
+    // Add packet capture endpoints if enabled
+    if let Some(capture) = packet_capture.clone() {
+        router = router
+            .route("/api/packets", axum::routing::get(get_packets))
+            .route("/api/packets/count", axum::routing::get(get_packet_count))
+            .layer(Extension(capture));
+    }
+
+    let router = router.layer(global_layer);
 
     // Signal the server to shutdown using Handle.
     let handle = Handle::new();
@@ -154,4 +180,40 @@ pub async fn http2_track(
         .await
         .map(ErasedJson::pretty)
         .map_err(Error::from)
+}
+
+#[inline]
+pub async fn get_packets(
+    Extension(capture): Extension<PacketCapture>,
+) -> Result<ErasedJson> {
+    // Small delay to ensure any packets from this request are captured
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let packets = capture.get_packets();
+
+    // Clear packets after retrieving them so each request shows fresh data
+    capture.clear_packets();
+
+    // TODO: only clear packet matching the current request (ip port) to avoid losing packets
+    // So if there are multiple requests, we can still see packets for each one
+
+    Ok(ErasedJson::pretty(&packets))
+}
+
+#[inline]
+pub async fn get_packet_count(
+    Extension(capture): Extension<PacketCapture>,
+) -> Result<ErasedJson> {
+    // Small delay to ensure any packets from this request are captured
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let count = capture.get_packet_count();
+
+    // Clear packets after getting count so each request shows fresh data
+    capture.clear_packets();
+
+    // TODO: only clear packet matching the current request (ip port) to avoid losing packets
+    // So if there are multiple requests, we can still see packets for each one
+
+    Ok(ErasedJson::pretty(count))
 }
