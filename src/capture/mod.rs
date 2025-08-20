@@ -2,10 +2,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::{
     collections::VecDeque,
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     time::{SystemTime, UNIX_EPOCH},
 };
-use tokio::task;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapturedPacket {
@@ -26,6 +28,7 @@ pub struct PacketCapture {
     packets: Arc<Mutex<VecDeque<CapturedPacket>>>,
     max_packets: usize,
     server_port: u16,
+    shutdown_flag: Arc<AtomicBool>,
 }
 
 impl PacketCapture {
@@ -34,6 +37,7 @@ impl PacketCapture {
             packets: Arc::new(Mutex::new(VecDeque::new())),
             max_packets,
             server_port,
+            shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -44,6 +48,7 @@ impl PacketCapture {
         let packets = self.packets.clone();
         let max_packets = self.max_packets;
         let server_port = self.server_port;
+        let shutdown_flag = self.shutdown_flag.clone();
 
         tracing::info!("Attempting to start packet capture on port {}", server_port);
 
@@ -54,9 +59,13 @@ impl PacketCapture {
 
                 // Spawn the actual capture task
                 let _capture_handle = tokio::task::spawn_blocking(move || {
-                    if let Err(e) =
-                        Self::run_capture_blocking(packets, max_packets, server_port, interface)
-                    {
+                    if let Err(e) = Self::run_capture_blocking(
+                        packets,
+                        max_packets,
+                        server_port,
+                        interface,
+                        shutdown_flag,
+                    ) {
                         tracing::error!("Packet capture task error: {}", e);
                     }
                 });
@@ -124,16 +133,9 @@ impl PacketCapture {
         max_packets: usize,
         server_port: u16,
         interface: Option<String>,
+        shutdown_flag: Arc<AtomicBool>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         use pcap::{Capture, Device};
-        use pnet::packet::{
-            ethernet::{EtherTypes, EthernetPacket},
-            ip::IpNextHeaderProtocols,
-            ipv4::Ipv4Packet,
-            ipv6::Ipv6Packet,
-            tcp::TcpPacket,
-            Packet,
-        };
 
         let devices = Device::list()?;
         let device = if let Some(iface) = interface {
@@ -167,6 +169,11 @@ impl PacketCapture {
         let mut packet_count = 0;
 
         loop {
+            if shutdown_flag.load(Ordering::SeqCst) {
+                tracing::info!("Shutdown flag is set, terminating packet capture loop");
+                break;
+            }
+
             match cap.next_packet() {
                 Ok(packet) => {
                     packet_count += 1;
@@ -228,6 +235,12 @@ impl PacketCapture {
                 }
             }
         }
+
+        tracing::info!(
+            "Packet capture thread exiting, processed {} packets",
+            packet_count
+        );
+        Ok(())
     }
 
     fn parse_packet(data: &[u8], server_port: u16) -> Option<CapturedPacket> {
@@ -305,7 +318,7 @@ impl PacketCapture {
     }
 
     fn parse_packet_with_pktparse(data: &[u8]) -> Option<JsonValue> {
-        use pktparse::{ethernet, ip::IPProtocol, ipv4, ipv6, tcp, udp};
+        use pktparse::{ethernet, ip::IPProtocol, ipv4, ipv6, tcp};
         use serde_json::{json, to_value};
 
         // Try to parse the ethernet frame
@@ -405,29 +418,12 @@ impl PacketCapture {
 
                 Some(parsed)
             }
-            Err(_) => {
-                Some(json!({
-                    "parse_error": "Failed to parse ethernet frame",
-                    "raw_data_length": data.len(),
-                    "raw_data_preview": hex::encode(&data[..std::cmp::min(data.len(), 32)])
-                }))
-            }
+            Err(_) => Some(json!({
+                "parse_error": "Failed to parse ethernet frame",
+                "raw_data_length": data.len(),
+                "raw_data_preview": hex::encode(&data[..std::cmp::min(data.len(), 32)])
+            })),
         }
-    }
-
-    pub fn get_packets(&self) -> Vec<CapturedPacket> {
-        let packets_guard = self.packets.lock().unwrap();
-        packets_guard.iter().cloned().collect()
-    }
-
-    pub fn clear_packets(&self) {
-        let mut packets_guard = self.packets.lock().unwrap();
-        packets_guard.clear();
-    }
-
-    pub fn get_packet_count(&self) -> usize {
-        let packets_guard = self.packets.lock().unwrap();
-        packets_guard.len()
     }
 
     pub fn get_packets_for_client(&self, client_ip: &str, client_port: u16) -> Vec<CapturedPacket> {
@@ -445,11 +441,8 @@ impl PacketCapture {
             .retain(|packet| !(packet.src_ip == client_ip && packet.src_port == client_port));
     }
 
-    pub fn get_packet_count_for_client(&self, client_ip: &str, client_port: u16) -> usize {
-        let packets_guard = self.packets.lock().unwrap();
-        packets_guard
-            .iter()
-            .filter(|packet| packet.src_ip == client_ip && packet.src_port == client_port)
-            .count()
+    pub fn shutdown(&self) {
+        tracing::info!("Signaling packet capture to shutdown");
+        self.shutdown_flag.store(true, Ordering::SeqCst);
     }
 }

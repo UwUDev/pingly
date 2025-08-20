@@ -26,8 +26,8 @@ use tracker::{
     info::{ConnectionTrack, Track, TrackInfo},
 };
 
-use crate::{error::Error, Args, Result};
 use crate::capture::PacketCapture;
+use crate::{error::Error, Args, Result};
 
 #[tokio::main]
 pub async fn run(args: Args) -> Result<()> {
@@ -88,7 +88,6 @@ pub async fn run(args: Args) -> Result<()> {
     if let Some(capture) = packet_capture.clone() {
         router = router
             .route("/api/packets", axum::routing::get(get_packets))
-            .route("/api/packets/count", axum::routing::get(get_packet_count))
             .layer(Extension(capture));
     }
 
@@ -98,7 +97,10 @@ pub async fn run(args: Args) -> Result<()> {
     let handle = Handle::new();
 
     // Spawn a task to gracefully shutdown server.
-    tokio::spawn(signal::graceful_shutdown(handle.clone()));
+    tokio::spawn(signal::graceful_shutdown(
+        handle.clone(),
+        packet_capture.clone(),
+    ));
 
     // Load TLS configuration with HTTP/2 ALPN preference
     let config = match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
@@ -197,21 +199,4 @@ pub async fn get_packets(
     capture.clear_packets_for_client(&client_ip, client_port);
 
     Ok(ErasedJson::pretty(&packets))
-}
-
-#[inline]
-pub async fn get_packet_count(
-    Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(capture): Extension<PacketCapture>,
-) -> Result<ErasedJson> {
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    let client_ip = addr.ip().to_string();
-    let client_port = addr.port();
-
-    let count = capture.get_packet_count_for_client(&client_ip, client_port);
-
-    capture.clear_packets_for_client(&client_ip, client_port);
-
-    Ok(ErasedJson::pretty(count))
 }

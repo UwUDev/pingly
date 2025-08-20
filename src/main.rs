@@ -47,10 +47,12 @@ pub struct Args {
     pub tls_key: Option<PathBuf>,
 
     /// Enable packet capture for TCP/IP analysis (requires root privileges)
+    #[cfg(target_family = "unix")]
     #[clap(long)]
     pub capture_packets: bool,
 
     /// Network interface to capture packets from (default: auto-detect)
+    #[cfg(target_family = "unix")]
     #[clap(long)]
     pub capture_interface: Option<String>,
 }
