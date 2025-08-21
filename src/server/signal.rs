@@ -4,16 +4,20 @@ use axum_server::Handle;
 use tokio::time::sleep;
 use tracing::info;
 
-use crate::capture::PacketCapture;
+use super::tracker::capture::TcpCaptureTrack;
 
-pub(super) async fn graceful_shutdown(handle: Handle, packet_capture: Option<PacketCapture>) {
+pub(super) async fn graceful_shutdown(
+    handle: Handle,
+    #[cfg(unix)] capture: Option<TcpCaptureTrack>,
+) {
     tokio::signal::ctrl_c()
         .await
         .expect("Ctrl+C signal hanlde error");
 
     info!("Ctrl+C signal received: starting graceful shutdown");
 
-    if let Some(capture) = packet_capture {
+    #[cfg(unix)]
+    if let Some(capture) = capture {
         capture.shutdown();
     }
 

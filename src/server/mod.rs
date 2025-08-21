@@ -14,7 +14,7 @@ use axum::{
 };
 use axum_extra::response::ErasedJson;
 use axum_server::Handle;
-use tower::limit::ConcurrencyLimitLayer;
+use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
     trace::{DefaultMakeSpan, DefaultOnFailure, DefaultOnResponse, TraceLayer},
@@ -23,10 +23,10 @@ use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use tracker::{
     accept::TrackAcceptor,
+    capture::TcpCaptureTrack,
     info::{ConnectionTrack, Track, TrackInfo},
 };
 
-use crate::capture::PacketCapture;
 use crate::{error::Error, Args, Result};
 
 #[tokio::main]
@@ -45,24 +45,8 @@ pub async fn run(args: Args) -> Result<()> {
     tracing::info!("Concurrent limit: {}", args.concurrent);
     tracing::info!("Bind address: {}", args.bind);
 
-    // Initialize packet capture if enabled
-    let packet_capture = if args.capture_packets {
-        tracing::info!("Packet capture enabled - requires root privileges");
-        let capture = PacketCapture::new(128, args.bind.port()); // Keep last 1000 packets
-        if let Err(e) = capture.start_capture(args.capture_interface.clone()) {
-            tracing::error!("Failed to start packet capture: {}", e);
-            tracing::warn!("Continuing without packet capture...");
-            None
-        } else {
-            tracing::info!("Packet capture started successfully");
-            Some(capture)
-        }
-    } else {
-        None
-    };
-
-    // init global layer provider
-    let global_layer = tower::ServiceBuilder::new()
+    // Init global layer
+    let global_layer = ServiceBuilder::new()
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
@@ -78,29 +62,51 @@ pub async fn run(args: Args) -> Result<()> {
         )
         .layer(ConcurrencyLimitLayer::new(args.concurrent));
 
+    // Create the router with the tracking endpoints
+    #[cfg_attr(not(unix), unused_mut)]
     let mut router = Router::new()
         .route("/api/all", any(track))
         .route("/api/tls", any(tls_track))
         .route("/api/http1", any(http1_track))
         .route("/api/http2", any(http2_track));
 
-    // Add packet capture endpoints if enabled
-    if let Some(capture) = packet_capture.clone() {
-        router = router
-            .route("/api/packets", axum::routing::get(get_packets))
-            .layer(Extension(capture));
-    }
-
-    let router = router.layer(global_layer);
-
     // Signal the server to shutdown using Handle.
     let handle = Handle::new();
 
+    // Add TCP tracking layer
+    #[cfg(unix)]
+    {
+        let mut tcp_capture_track: Option<TcpCaptureTrack> = None;
+        if args.tcp_capture_packet {
+            tracing::info!("Enabling TCP/IP packet capture (requires root)");
+            let capture = TcpCaptureTrack::new(128, args.bind.port());
+            if let Err(err) = capture.start_capture(args.tcp_capture_interface.clone()) {
+                tracing::error!("Failed to start TCP/IP packet capture: {err}");
+            } else {
+                if let Some(iface) = args.tcp_capture_interface {
+                    tracing::info!(
+                        "TCP/IP packet capture started successfully on interface {iface}"
+                    );
+                }
+                tcp_capture_track = Some(capture);
+            }
+        }
+
+        if let Some(capture) = tcp_capture_track.clone() {
+            router = router
+                .route("/api/tcp", any(tcp_track))
+                .layer(Extension(capture));
+        }
+
+        tokio::spawn(signal::graceful_shutdown(
+            handle.clone(),
+            tcp_capture_track.clone(),
+        ));
+    }
+
     // Spawn a task to gracefully shutdown server.
-    tokio::spawn(signal::graceful_shutdown(
-        handle.clone(),
-        packet_capture.clone(),
-    ));
+    #[cfg(not(unix))]
+    tokio::spawn(signal::graceful_shutdown(handle.clone()));
 
     // Load TLS configuration with HTTP/2 ALPN preference
     let config = match (args.tls_cert.as_ref(), args.tls_key.as_ref()) {
@@ -124,7 +130,11 @@ pub async fn run(args: Args) -> Result<()> {
     server
         .handle(handle)
         .map(TrackAcceptor::new)
-        .serve(router.into_make_service_with_connect_info::<SocketAddr>())
+        .serve(
+            router
+                .layer(global_layer)
+                .into_make_service_with_connect_info::<SocketAddr>(),
+        )
         .await
         .map_err(Into::into)
 }
@@ -185,9 +195,9 @@ pub async fn http2_track(
 }
 
 #[inline]
-pub async fn get_packets(
+pub async fn tcp_track(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
-    Extension(capture): Extension<PacketCapture>,
+    Extension(capture): Extension<TcpCaptureTrack>,
 ) -> Result<ErasedJson> {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
