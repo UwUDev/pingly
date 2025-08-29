@@ -7,7 +7,10 @@ use axum::{
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
-use super::inspector::{ClientHello, Frame, Http1Headers, Http2Frame, LazyClientHello};
+use super::{
+    capture::CapturedPacket,
+    inspector::{ClientHello, Frame, Http1Headers, Http2Frame, LazyClientHello},
+};
 
 /// TLS handshake tracking information, which includes the client hello payload.
 #[derive(Serialize)]
@@ -59,6 +62,9 @@ pub struct TrackInfo {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     http2: Option<Http2TrackInfo>,
+
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tcp: Vec<CapturedPacket>,
 }
 
 /// Track enum to specify which tracking information to collect.
@@ -257,6 +263,18 @@ impl TrackInfo {
         req: Request<Body>,
         connection_track: ConnectionTrack,
     ) -> TrackInfo {
+        Self::new_with_tcp(track, addr, req, connection_track, Vec::new())
+    }
+
+    /// Create a new [`TrackInfo`] instance with TCP data.
+    #[inline]
+    pub fn new_with_tcp(
+        track: Track,
+        addr: SocketAddr,
+        req: Request<Body>,
+        connection_track: ConnectionTrack,
+        tcp_packets: Vec<CapturedPacket>,
+    ) -> TrackInfo {
         let mut tls = connection_track
             .client_hello
             .and_then(LazyClientHello::parse)
@@ -276,6 +294,7 @@ impl TrackInfo {
             tls,
             http1: connection_track.http1_headers.map(Http1TrackInfo::new),
             http2: connection_track.http2_frames.and_then(Http2TrackInfo::new),
+            tcp: tcp_packets,
         };
 
         match track {
@@ -283,16 +302,19 @@ impl TrackInfo {
             Track::Tls => TrackInfo {
                 http1: None,
                 http2: None,
+                tcp: Vec::new(),
                 ..track_info
             },
             Track::HTTP1 => TrackInfo {
                 tls: None,
                 http2: None,
+                tcp: Vec::new(),
                 ..track_info
             },
             Track::HTTP2 => TrackInfo {
                 tls: None,
                 http1: None,
+                tcp: Vec::new(),
                 ..track_info
             },
         }

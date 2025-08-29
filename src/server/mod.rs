@@ -150,12 +150,30 @@ impl IntoResponse for Error {
 pub async fn track(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
     Extension(track): Extension<ConnectionTrack>,
+    tcp_capture: Option<Extension<TcpCaptureTrack>>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
-    tokio::task::spawn_blocking(move || TrackInfo::new(Track::All, addr, req, track))
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
+    // get TCP packets if capture is available
+    let tcp_packets = if let Some(Extension(capture)) = tcp_capture {
+        // small delay to capture packets
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let client_ip = addr.ip().to_string();
+        let client_port = addr.port();
+
+        let packets = capture.get_packets_for_client(&client_ip, client_port);
+        capture.clear_packets_for_client(&client_ip, client_port);
+        packets
+    } else {
+        Vec::new()
+    };
+
+    tokio::task::spawn_blocking(move || {
+        TrackInfo::new_with_tcp(Track::All, addr, req, track, tcp_packets)
+    })
+    .await
+    .map(ErasedJson::pretty)
+    .map_err(Error::from)
 }
 
 #[inline]

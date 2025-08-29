@@ -22,7 +22,6 @@ pub struct CapturedPacket {
     pub src_port: u16,
     pub dst_port: u16,
     pub protocol: String,
-    pub payload_hex: String,
     pub packet_size: usize,
     pub parsed_info: Option<JsonValue>,
 }
@@ -233,7 +232,6 @@ fn run_capture_blocking(
                         src_port: 0,
                         dst_port: server_port,
                         protocol: "RAW".to_string(),
-                        payload_hex: hex::encode(&packet.data),
                         packet_size: packet.data.len(),
                         parsed_info,
                     };

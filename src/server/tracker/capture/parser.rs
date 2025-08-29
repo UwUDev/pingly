@@ -148,7 +148,6 @@ pub fn parse_packet(data: &[u8], server_port: u16) -> Option<CapturedPacket> {
                         src_port,
                         dst_port,
                         protocol: "TCP".to_string(),
-                        payload_hex: hex::encode(data),
                         packet_size: data.len(),
                         parsed_info,
                     });
@@ -172,7 +171,6 @@ pub fn parse_packet(data: &[u8], server_port: u16) -> Option<CapturedPacket> {
                         src_port,
                         dst_port,
                         protocol: "TCP".to_string(),
-                        payload_hex: hex::encode(data),
                         packet_size: data.len(),
                         parsed_info,
                     });
