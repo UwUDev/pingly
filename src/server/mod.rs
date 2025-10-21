@@ -15,7 +15,7 @@ use axum::{
 use axum_extra::response::ErasedJson;
 use axum_server::Handle;
 use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
-use hyper_util::rt::TokioTimer
+use hyper_util::rt::TokioTimer;
 
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
