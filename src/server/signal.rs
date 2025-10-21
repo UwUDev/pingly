@@ -9,8 +9,7 @@ use super::tracker::capture::TcpCaptureTrack;
 
 pub(super) async fn graceful_shutdown(
     handle: Handle,
-    #[cfg(target_os = "linux")]
-    capture: Option<TcpCaptureTrack>,
+    #[cfg(target_os = "linux")] capture: Option<TcpCaptureTrack>,
 ) {
     tokio::signal::ctrl_c()
         .await

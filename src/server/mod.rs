@@ -14,8 +14,8 @@ use axum::{
 };
 use axum_extra::response::ErasedJson;
 use axum_server::Handle;
-use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
 use hyper_util::rt::TokioTimer;
+use tower::{limit::ConcurrencyLimitLayer, ServiceBuilder};
 
 use tower_http::{
     cors::{AllowHeaders, AllowMethods, AllowOrigin, CorsLayer},
@@ -156,8 +156,7 @@ impl IntoResponse for Error {
 pub async fn track(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
     Extension(track): Extension<ConnectionTrack>,
-    #[cfg(target_os = "linux")]
-    tcp_capture: Option<Extension<TcpCaptureTrack>>,
+    #[cfg(target_os = "linux")] tcp_capture: Option<Extension<TcpCaptureTrack>>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
     // get TCP packets if capture is available
@@ -188,12 +187,10 @@ pub async fn track(
 
     #[cfg(not(target_os = "linux"))]
     {
-        tokio::task::spawn_blocking(move || {
-            TrackInfo::new(Track::All, addr, req, track)
-        })
-        .await
-        .map(ErasedJson::pretty)
-        .map_err(Error::from)
+        tokio::task::spawn_blocking(move || TrackInfo::new(Track::All, addr, req, track))
+            .await
+            .map(ErasedJson::pretty)
+            .map_err(Error::from)
     }
 }
 
