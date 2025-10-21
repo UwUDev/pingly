@@ -23,9 +23,11 @@ use tracing::Level;
 use tracing_subscriber::{EnvFilter, FmtSubscriber};
 use tracker::{
     accept::TrackAcceptor,
-    capture::TcpCaptureTrack,
     info::{ConnectionTrack, Track, TrackInfo},
 };
+
+#[cfg(target_os = "linux")]
+use tracker::capture::TcpCaptureTrack;
 
 use crate::{error::Error, Args, Result};
 
@@ -63,7 +65,7 @@ pub async fn run(args: Args) -> Result<()> {
         .layer(ConcurrencyLimitLayer::new(args.concurrent));
 
     // Create the router with the tracking endpoints
-    #[cfg_attr(not(unix), unused_mut)]
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut router = Router::new()
         .route("/api/all", any(track))
         .route("/api/tls", any(tls_track))
@@ -74,7 +76,7 @@ pub async fn run(args: Args) -> Result<()> {
     let handle = Handle::new();
 
     // Add TCP tracking layer
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     {
         let mut tcp_capture_track: Option<TcpCaptureTrack> = None;
         if args.tcp_capture_packet {
@@ -105,7 +107,7 @@ pub async fn run(args: Args) -> Result<()> {
     }
 
     // Spawn a task to gracefully shutdown server.
-    #[cfg(not(unix))]
+    #[cfg(not(target_os = "linux"))]
     tokio::spawn(signal::graceful_shutdown(handle.clone()));
 
     // Load TLS configuration with HTTP/2 ALPN preference
@@ -150,10 +152,12 @@ impl IntoResponse for Error {
 pub async fn track(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
     Extension(track): Extension<ConnectionTrack>,
+    #[cfg(target_os = "linux")]
     tcp_capture: Option<Extension<TcpCaptureTrack>>,
     req: Request<Body>,
 ) -> Result<ErasedJson> {
     // get TCP packets if capture is available
+    #[cfg(target_os = "linux")]
     let tcp_packets = if let Some(Extension(capture)) = tcp_capture {
         // small delay to capture packets
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -168,12 +172,25 @@ pub async fn track(
         Vec::new()
     };
 
-    tokio::task::spawn_blocking(move || {
-        TrackInfo::new_with_tcp(Track::All, addr, req, track, tcp_packets)
-    })
-    .await
-    .map(ErasedJson::pretty)
-    .map_err(Error::from)
+    #[cfg(target_os = "linux")]
+    {
+        tokio::task::spawn_blocking(move || {
+            TrackInfo::new_with_tcp(Track::All, addr, req, track, tcp_packets)
+        })
+        .await
+        .map(ErasedJson::pretty)
+        .map_err(Error::from)
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        tokio::task::spawn_blocking(move || {
+            TrackInfo::new(Track::All, addr, req, track)
+        })
+        .await
+        .map(ErasedJson::pretty)
+        .map_err(Error::from)
+    }
 }
 
 #[inline]
@@ -213,6 +230,7 @@ pub async fn http2_track(
 }
 
 #[inline]
+#[cfg(target_os = "linux")]
 pub async fn tcp_track(
     Extension(ConnectInfo(addr)): Extension<ConnectInfo<SocketAddr>>,
     Extension(capture): Extension<TcpCaptureTrack>,

@@ -7,10 +7,10 @@ use axum::{
 use serde::{Serialize, Serializer};
 use tokio_rustls::rustls::ProtocolVersion;
 
-use super::{
-    capture::CapturedPacket,
-    inspector::{ClientHello, Frame, Http1Headers, Http2Frame, LazyClientHello},
-};
+use super::inspector::{ClientHello, Frame, Http1Headers, Http2Frame, LazyClientHello};
+
+#[cfg(target_os = "linux")]
+use super::capture::CapturedPacket;
 
 /// TLS handshake tracking information, which includes the client hello payload.
 #[derive(Serialize)]
@@ -63,6 +63,7 @@ pub struct TrackInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     http2: Option<Http2TrackInfo>,
 
+    #[cfg(target_os = "linux")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     tcp: Vec<CapturedPacket>,
 }
@@ -263,11 +264,56 @@ impl TrackInfo {
         req: Request<Body>,
         connection_track: ConnectionTrack,
     ) -> TrackInfo {
-        Self::new_with_tcp(track, addr, req, connection_track, Vec::new())
+        #[cfg(target_os = "linux")]
+        return Self::new_with_tcp(track, addr, req, connection_track, Vec::new());
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let mut tls = connection_track
+                .client_hello
+                .and_then(LazyClientHello::parse)
+                .map(TlsTrackInfo::new);
+
+            if let Some(tls) = tls.as_mut() {
+                tls.0
+                    .set_tls_version_negotiated(connection_track.tls_version_negotiated);
+            }
+
+            let track_info = TrackInfo {
+                donate: Self::DONATE_URL,
+                address: addr,
+                http_version: format!("{:?}", req.version()),
+                method: req.method().clone(),
+                user_agent: req.headers().get(USER_AGENT).cloned(),
+                tls,
+                http1: connection_track.http1_headers.map(Http1TrackInfo::new),
+                http2: connection_track.http2_frames.and_then(Http2TrackInfo::new),
+            };
+
+            match track {
+                Track::All => track_info,
+                Track::Tls => TrackInfo {
+                    http1: None,
+                    http2: None,
+                    ..track_info
+                },
+                Track::HTTP1 => TrackInfo {
+                    tls: None,
+                    http2: None,
+                    ..track_info
+                },
+                Track::HTTP2 => TrackInfo {
+                    tls: None,
+                    http1: None,
+                    ..track_info
+                },
+            }
+        }
     }
 
     /// Create a new [`TrackInfo`] instance with TCP data.
     #[inline]
+    #[cfg(target_os = "linux")]
     pub fn new_with_tcp(
         track: Track,
         addr: SocketAddr,
@@ -294,6 +340,7 @@ impl TrackInfo {
             tls,
             http1: connection_track.http1_headers.map(Http1TrackInfo::new),
             http2: connection_track.http2_frames.and_then(Http2TrackInfo::new),
+            #[cfg(target_os = "linux")]
             tcp: tcp_packets,
         };
 
@@ -302,18 +349,21 @@ impl TrackInfo {
             Track::Tls => TrackInfo {
                 http1: None,
                 http2: None,
+                #[cfg(target_os = "linux")]
                 tcp: Vec::new(),
                 ..track_info
             },
             Track::HTTP1 => TrackInfo {
                 tls: None,
                 http2: None,
+                #[cfg(target_os = "linux")]
                 tcp: Vec::new(),
                 ..track_info
             },
             Track::HTTP2 => TrackInfo {
                 tls: None,
                 http1: None,
+                #[cfg(target_os = "linux")]
                 tcp: Vec::new(),
                 ..track_info
             },

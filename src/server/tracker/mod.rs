@@ -1,5 +1,5 @@
 pub mod accept;
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 pub mod capture;
 pub mod info;
 

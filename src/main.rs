@@ -46,12 +46,12 @@ pub struct Args {
     pub tls_key: Option<PathBuf>,
 
     /// Enable packet capture for TCP/IP analysis (requires root privileges)
-    #[cfg(target_family = "unix")]
+    #[cfg(target_os = "linux")]
     #[arg(long, short = 'T')]
     pub tcp_capture_packet: bool,
 
     /// Network interface to capture packets from (default: auto-detect)
-    #[cfg(target_family = "unix")]
+    #[cfg(target_os = "linux")]
     #[arg(long, short = 'I')]
     pub tcp_capture_interface: Option<String>,
 }
@@ -84,6 +84,7 @@ pub enum Commands {
 
 fn main() -> Result<()> {
     let opt = Opt::parse();
+    #[cfg(target_family = "unix")]
     let daemon = daemon::Daemon::default();
     match opt.commands {
         Commands::Run(config) => server::run(config),
